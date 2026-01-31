@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>P2P 大球吃小球</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: sans-serif; }
+        #menu { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(20,20,20,0.9); padding: 20px; border-radius: 10px; text-align: center; }
+        input { padding: 10px; margin: 10px; border-radius: 5px; border: none; }
+        button { padding: 10px 20px; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+<div id="menu">
+    <h2>剛滿月的 P2P 遊戲</h2>
+    <p>你的 ID: <b id="my-id">正在連線...</b></p>
+    <input type="text" id="peer-id" placeholder="輸入房主的 ID">
+    <button onclick="joinRoom()">加入房間</button>
+    <hr>
+    <p>或是</p>
+    <button onclick="startHost()" style="background: #007bff;">當房主 (Host)</button>
+</div>
+
+<canvas id="gameCanvas" style="display:none;"></canvas>
+
+<script>
+    let peer, conn;
+    let isHost = false;
+    let players = {};
+    let foods = [];
+    const MAP_SIZE = 10000;
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let myPos = { x: 5000, y: 5000, r: 30, color: `hsl(${Math.random()*360}, 80%, 60%)` };
+    let mouse = { x: 0, y: 0 };
+
+    // 初始化 PeerJS (預設使用 Google STUN 伺服器)
+    peer = new Peer();
+
+    peer.on('open', (id) => {
+        document.getElementById('my-id').innerText = id;
+    });
+
+    // 1. 房主邏輯
+    function startHost() {
+        isHost = true;
+        initFoods();
+        startGame();
+        peer.on('connection', (c) => {
+            c.on('data', (data) => {
+                if(data.type === 'move') players[data.id] = data.payload;
+                // 房主廣播所有資訊回給所有 Client
+                broadcast({ type: 'update', players, foods });
+            });
+        });
+    }
+
+    // 2. 客端邏輯
+    function joinRoom() {
+        const targetId = document.getElementById('peer-id').value;
+        conn = peer.connect(targetId);
+        conn.on('open', () => {
+            startGame();
+            conn.on('data', (data) => {
+                if(data.type === 'update') {
+                    players = data.players;
+                    foods = data.foods;
+                }
+            });
+        });
+    }
+
+    function startGame() {
+        document.getElementById('menu').style.display = 'none';
+        canvas.style.display = 'block';
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        window.addEventListener('mousemove', e => {
+            mouse.x = e.clientX - canvas.width/2;
+            mouse.y = e.clientY - canvas.height/2;
+        });
+        requestAnimationFrame(gameLoop);
+    }
+
+    function initFoods() {
+        for(let i=0; i<500; i++) {
+            foods.push({ x: Math.random()*MAP_SIZE, y: Math.random()*MAP_SIZE, color: '#0f0' });
+        }
+    }
+
+    function broadcast(data) {
+        // 房主把資料發給所有連進來的 Peers (實際開發需維護 connections 陣列)
+        // 這裡簡化演示：P2P 核心就是「數據交換」
+    }
+
+    function gameLoop() {
+        // 移動玩家
+        let dist = Math.sqrt(mouse.x**2 + mouse.y**2);
+        if (dist > 5) {
+            myPos.x += (mouse.x / dist) * 5;
+            myPos.y += (mouse.y / dist) * 5;
+        }
+
+        // 傳送位置給對方
+        let payload = { type: 'move', id: peer.id, payload: myPos };
+        if(isHost) players[peer.id] = myPos;
+        else if(conn) conn.send(payload);
+
+        // 繪製邏輯 (Camera, Grid, Balls...)
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.clearRect(0,0,canvas.width, canvas.height);
+        
+        let zoom = 30 / myPos.r;
+        ctx.translate(canvas.width/2, canvas.height/2);
+        ctx.scale(zoom, zoom);
+        ctx.translate(-myPos.x, -myPos.y);
+
+        // 畫自己跟別人
+        [myPos, ...Object.values(players)].forEach(p => {
+            ctx.fillStyle = p.color || '#fff';
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+        });
+
+        requestAnimationFrame(gameLoop);
+    }
+</script>
+</body>
+</html>
