@@ -1,55 +1,56 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>剛滿月的 P2P 宇宙 - 短ID版</title>
+    <title>剛滿月的 P2P 宇宙 - 最終完整版</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; background: #050505; color: white; font-family: sans-serif; overflow: hidden; }
-        #overlay { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(10,10,10,0.95); padding: 25px; border-radius: 12px; text-align: center; border: 1px solid #ff00ff; box-shadow: 0 0 15px #ff00ff55; z-index: 100; width: 300px; }
-        input { padding: 12px; border-radius: 6px; border: 1px solid #333; background: #111; color: #0f0; width: 85%; margin: 8px 0; font-family: monospace; font-size: 1.1em; }
-        button { padding: 12px; background: #ff00ff; color: white; border: none; cursor: pointer; border-radius: 6px; font-weight: bold; margin: 5px 0; width: 95%; transition: 0.2s; }
-        button:hover { filter: brightness(1.2); }
-        .hint { font-size: 0.8em; color: #888; margin-bottom: 15px; }
+        body { margin: 0; background: #000; color: white; font-family: sans-serif; overflow: hidden; }
+        #overlay { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 30px; border-radius: 15px; text-align: center; border: 2px solid #ff0000; box-shadow: 0 0 20px #ff0000; z-index: 100; width: 320px; }
+        input { padding: 12px; border-radius: 6px; border: 1px solid #444; background: #111; color: #fff; width: 85%; margin: 10px 0; font-family: monospace; font-size: 1.2em; text-align: center; }
+        button { padding: 12px; background: #ff0000; color: white; border: none; cursor: pointer; border-radius: 6px; font-weight: bold; margin: 5px 0; width: 95%; transition: 0.2s; font-size: 1em; }
+        button:hover { filter: brightness(1.2); box-shadow: 0 0 10px #ff0000; }
+        .hint { font-size: 0.85em; color: #aaa; margin-bottom: 15px; }
+        #status { font-size: 0.9em; color: #ff0000; margin-top: 10px; height: 1.2em; }
     </style>
 </head>
 <body>
 
 <div id="overlay">
-    <h2>宇宙編號</h2>
-    <p class="hint">例如輸入: p123</p>
-    
-    <input type="text" id="custom-id" placeholder="輸入編號 (p+數字)">
-    <button onclick="startUniverse(true)">當房主 (Host)</button>
-    <button onclick="startUniverse(false)" style="background: #007bff;">加入好友 (Join)</button>
-    
-    <p id="status" style="font-size: 0.9em; color: #ff00ff;"></p>
+    <h2 style="letter-spacing: 2px;">宇宙編號</h2>
+    <p class="hint">請輸入：p + 數字 (例如 p888)</p>
+    <input type="text" id="custom-id" placeholder="p123" value="p123">
+    <button onclick="startUniverse(true)">建立宇宙 (Host)</button>
+    <button onclick="startUniverse(false)" style="background: #333;">穿越宇宙 (Join)</button>
+    <p id="status"></p>
 </div>
 
 <canvas id="gameCanvas"></canvas>
 
 <script>
     let peer, conn, isHost, myId;
-    let myPos = { x: 5000, y: 5000, r: 30, color: `hsl(${Math.random()*360}, 80%, 60%)` };
+    let myPos = { x: 5000, y: 5000, r: 30, color: '#ffffff' };
     let players = {}, foods = [], conns = [];
-    
+    let mouse = { x: 0, y: 0 };
+    const WORLD_SIZE = 10000;
+
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
 
     function startUniverse(hostMode) {
-        const inputId = document.getElementById('custom-id').value;
+        const inputId = document.getElementById('custom-id').value.trim();
         if (!inputId.startsWith('p')) {
-            alert("編號請以 'p' 開頭，例如 p123");
+            alert("編號請以 'p' 開頭");
             return;
         }
 
         isHost = hostMode;
-        document.getElementById('status').innerText = "正在穿越宇宙...";
+        document.getElementById('status').innerText = "正在扭曲時空...";
 
-        // 初始化 PeerJS 並指定短 ID
         peer = new Peer(inputId);
 
         peer.on('open', (id) => {
             myId = id;
+            players[myId] = myPos;
             if (isHost) {
                 setupHost();
             } else {
@@ -58,27 +59,31 @@
         });
 
         peer.on('error', (err) => {
-            if (err.type === 'unavailable-id') {
-                alert("這個編號已被佔用！換個數字吧。");
-                location.reload();
-            } else {
-                alert("連線失敗：" + err.type);
-            }
+            if (err.type === 'unavailable-id') alert("編號被佔用了！換一個吧。");
+            else alert("連線失敗：" + err.type);
+            location.reload();
         });
     }
 
     function setupHost() {
-        // 生成食物
-        for(let i=0; i<600; i++) foods.push({id: i, x: Math.random()*10000, y: Math.random()*10000, c: `hsl(${Math.random()*360}, 60%, 50%)`});
+        // 初始化食物
+        for(let i=0; i<600; i++) {
+            foods.push({id: i, x: Math.random()*WORLD_SIZE, y: Math.random()*WORLD_SIZE, c: `hsl(${Math.random()*360}, 70%, 60%)`});
+        }
         
         peer.on('connection', c => {
             conns.push(c);
             c.on('data', data => {
                 if(data.type === 'move') players[data.id] = data;
                 if(data.type === 'eat_food') foods = foods.filter(f => f.id !== data.foodId);
-                broadcast({type: 'sync', players, foods});
             });
         });
+
+        // Host 每秒 20 次廣播狀態給所有人
+        setInterval(() => {
+            broadcast({type: 'sync', players, foods});
+        }, 50);
+
         startGame();
     }
 
@@ -86,64 +91,114 @@
         conn = peer.connect(targetId);
         conn.on('open', () => {
             conn.on('data', data => {
-                if(data.type === 'sync') { players = data.players; foods = data.foods; }
+                if(data.type === 'sync') {
+                    players = data.players;
+                    foods = data.foods;
+                }
             });
             startGame();
         });
     }
 
-    function broadcast(data) { conns.forEach(c => c.open && c.send(data)); }
+    function broadcast(data) {
+        conns.forEach(c => c.open && c.send(data));
+    }
 
     function startGame() {
         document.getElementById('overlay').style.display = 'none';
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        resize();
+        window.addEventListener('resize', resize);
+        window.addEventListener('mousemove', e => {
+            mouse.x = e.clientX - canvas.width/2;
+            mouse.y = e.clientY - canvas.height/2;
+        });
         loop();
     }
 
-    // 遊戲邏輯與渲染 (與之前相同，略作簡化)
-    window.addEventListener('mousemove', e => {
-        mouse.x = e.clientX - canvas.width/2;
-        mouse.y = e.clientY - canvas.height/2;
-    });
-    let mouse = {x:0, y:0};
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+
+    function checkEating() {
+        foods.forEach((f, idx) => {
+            let dx = myPos.x - f.x;
+            let dy = myPos.y - f.y;
+            if (Math.sqrt(dx*dx + dy*dy) < myPos.r) {
+                myPos.r += 0.4; // 吃到食物增長
+                if (isHost) foods.splice(idx, 1);
+                else conn.send({type: 'eat_food', foodId: f.id});
+            }
+        });
+    }
 
     function loop() {
+        // 移動邏輯
         let d = Math.sqrt(mouse.x**2 + mouse.y**2);
         if(d > 5) {
-            let speed = Math.max(1, 150 / myPos.r);
-            myPos.x = Math.max(0, Math.min(10000, myPos.x + (mouse.x/d) * speed));
-            myPos.y = Math.max(0, Math.min(10000, myPos.y + (mouse.y/d) * speed));
+            let speed = Math.max(1.5, 120 / myPos.r);
+            myPos.x = Math.max(0, Math.min(WORLD_SIZE, myPos.x + (mouse.x/d) * speed));
+            myPos.y = Math.max(0, Math.min(WORLD_SIZE, myPos.y + (mouse.y/d) * speed));
         }
 
-        if(!isHost && conn && conn.open) conn.send({type:'move', id: myId, x:myPos.x, y:myPos.y, r:myPos.r, color:myPos.color});
-        if(isHost) players[myId] = myPos;
+        checkEating();
+        
+        // 更新本地玩家列表
+        players[myId] = myPos;
 
-        // 渲染畫布部分...
+        // 客戶端傳送位置給 Host
+        if(!isHost && conn && conn.open) {
+            conn.send({type:'move', id: myId, x:myPos.x, y:myPos.y, r:myPos.r, color:myPos.color});
+        }
+
         render();
         requestAnimationFrame(loop);
     }
 
     function render() {
         ctx.setTransform(1,0,0,1,0,0);
-        ctx.clearRect(0,0,canvas.width, canvas.height);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0,0,canvas.width, canvas.height);
+
         let zoom = Math.pow(30/myPos.r, 0.4);
         ctx.translate(canvas.width/2, canvas.height/2);
         ctx.scale(zoom, zoom);
         ctx.translate(-myPos.x, -myPos.y);
 
-        // 畫網格
-        ctx.strokeStyle = '#222';
-        for(let i=0; i<=10000; i+=250) { 
-            ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,10000); ctx.stroke(); 
-            ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(10000,i); ctx.stroke(); 
+        // 1. 畫網格
+        ctx.strokeStyle = '#1a1a1a';
+        ctx.lineWidth = 2;
+        for(let i=0; i<=WORLD_SIZE; i+=500) { 
+            ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,WORLD_SIZE); ctx.stroke(); 
+            ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(WORLD_SIZE,i); ctx.stroke(); 
         }
-        // 畫食物
-        foods.forEach(f => { ctx.fillStyle=f.c; ctx.beginPath(); ctx.arc(f.x,f.y,12,0,Math.PI*2); ctx.fill(); });
-        // 畫玩家
+
+        // 2. 畫紅色雷射邊界
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 10;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = '#ff0000';
+        ctx.strokeRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+        ctx.shadowBlur = 0;
+
+        // 3. 畫食物
+        foods.forEach(f => {
+            ctx.fillStyle = f.c;
+            ctx.beginPath(); ctx.arc(f.x, f.y, 10, 0, Math.PI*2); ctx.fill();
+        });
+
+        // 4. 畫玩家 (白色發光球)
         Object.values(players).forEach(p => {
-            ctx.fillStyle = p.color;
+            ctx.fillStyle = '#ffffff';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#ffffff';
             ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // 畫個小 ID 在球旁邊
+            ctx.fillStyle = '#aaa';
+            ctx.font = "20px Arial";
+            ctx.fillText(p.id === myId ? "Me" : "Player", p.x + p.r, p.y);
         });
     }
 </script>
