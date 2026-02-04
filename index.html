@@ -241,7 +241,7 @@
                 // 反之：玩家撞到大 Bot 死亡
                 if(dist < b.r && b.r > myCells[0].r * 1.1) {
                     handleDeath();
-                    broadcast({type: 'kill_notice', msg: `${b.name} 給了 Fear 一個深刻教訓`});
+                    broadcast({type: 'kill_notice', msg: `${b.name} 給了 某個玩家 一個深刻教訓`});
                 }
             }
         });
@@ -289,3 +289,4 @@
 </script>
 </body>
 </html>
+
