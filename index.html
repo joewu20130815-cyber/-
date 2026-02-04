@@ -1,142 +1,291 @@
-import cv2
-import numpy as np
-import pyautogui
-import mss
-import time
-import keyboard
-import math
-import pygetwindow as gw
-
-# --- 核心參數 ---
-WINDOW_TITLE = "FEAR UNIVERSE" # 請確保你的網頁標題包含這個詞
-SCALE_FACTOR = 0.5             # 降採樣比例 (0.5 代表運算量減少 75%)
-LOCK_SMOOTHING = 0.94          # 移動平滑度
-PURSUIT_DELAY = 0.15           # 追擊餘輝 (秒)
-MIN_BALL_AREA = 100            # 實心球最小面積 (縮小後的值)
-
-# 關閉 pyautogui 安全防護，避免邊緣碰撞報錯
-pyautogui.FAILSAFE = False
-
-# --- 初始化記憶變數 ---
-running = True
-last_target_pos = None
-last_target_time = 0
-
-print(f">>> Fear 性能優化版啟動！")
-print(f">>> 模式：降採樣運算 + 精準屏蔽 + 獵人專注")
-
-# 視窗定位
-all_wins = gw.getWindowsWithTitle(WINDOW_TITLE)
-if not all_wins:
-    print("找不到視窗！請檢查網頁標題。")
-    exit()
-
-target_win = all_wins[0]
-sct = mss.mss()
-
-try:
-    while True:
-        # 1. 系統控制
-        if keyboard.is_pressed('q'): break
-        if keyboard.is_pressed('p'):
-            running = not running
-            print(f"狀態: {'執行中' if running else '暫停'}")
-            time.sleep(0.3)
-        if not running:
-            time.sleep(0.1)
-            continue
-
-        # 2. 高速擷取與降採樣 (性能關鍵)
-        win_rect = {"top": target_win.top, "left": target_win.left, "width": target_win.width, "height": target_win.height}
-        raw_shot = np.array(sct.grab(win_rect))[:, :, :3]
+<!DOCTYPE html>
+<html>
+<head>
+    <title>球 宇宙</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; color: white; font-family: '微軟正黑體', sans-serif; overflow: hidden; }
+        #overlay { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(10,10,10,0.95); padding: 30px; border-radius: 20px; text-align: center; border: 2px solid #ff0000; z-index: 100; width: 350px; }
+        input { padding: 12px; border-radius: 8px; border: 1px solid #333; background: #111; color: #fff; width: 85%; margin: 10px 0; outline: none; }
+        button { padding: 12px; background: #ff0000; color: white; border: none; cursor: pointer; border-radius: 8px; font-weight: bold; width: 95%; margin: 5px 0; }
         
-        # 縮小畫面進行處理，極大減輕 1050 負擔
-        small_img = cv2.resize(raw_shot, (0, 0), fx=SCALE_FACTOR, fy=SCALE_FACTOR)
-        hsv = cv2.cvtColor(small_img, cv2.COLOR_BGR2HSV)
+        #ui-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        #leaderboard { position: absolute; top: 20px; right: 20px; background: rgba(0,0,0,0.7); padding: 15px; border: 1px solid #fff; width: 220px; pointer-events: auto; }
+        #chat-box { position: absolute; bottom: 20px; left: 20px; width: 320px; background: rgba(0,0,0,0.6); pointer-events: auto; border-radius: 10px; border: 1px solid #333; }
+        #chat-content { height: 150px; overflow-y: auto; padding: 10px; font-size: 0.85em; color: #ccc; }
+        #chat-input { width: 100%; background: #222; border: none; color: white; padding: 12px; outline: none; box-sizing: border-box; border-radius: 0 0 10px 10px; }
+        #status-bar { position: absolute; top: 20px; left: 20px; font-size: 0.9em; text-shadow: 2px 2px #000; }
+    </style>
+</head>
+<body>
+
+<div id="overlay">
+    <h1 style="margin:0; letter-spacing:5px; color:#ff0000;">購票處</h1>
+    <p style="font-size:0.8em; color:#888;">???</p>
+    <input type="text" id="user-name" placeholder="輸入暱稱 (預設 Fear(不准用fear(ai)!))" maxlength="15">
+    <input type="text" id="room-id" placeholder="房間編號" value="p123">
+    <button onclick="startUniverse(true)">建立宇宙 (Host)</button>
+    <button onclick="startUniverse(false)" style="background: #333;">加入宇宙 (Client)</button>
+    <p style="font-size: 0.7em; color: #555;">[W] 噴氣加速 | [Space] 分裂 | [Enter] 聊天</p>
+</div>
+
+<div id="ui-layer">
+    <div id="status-bar">
+        <div id="level-display">等級: Lv.1</div>
+        <div id="death-display">死亡場數: 0</div>
+    </div>
+    <div id="leaderboard">
+        <h4 style="margin:0 0 10px 0; text-align: center; border-bottom:1px solid #555;">🏆 全宇宙排行</h4>
+        <div id="lb-list"></div>
+    </div>
+    <div id="chat-box">
+        <div id="chat-content"></div>
+        <input type="text" id="chat-input" placeholder="按 Enter 說話...">
+    </div>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    let peer, conn, isHost, myId, myStream;
+    const WORLD_SIZE = 100000, GRID_SIZE = 6000;
+    let myCells = []; 
+    let players = {}, foods = [], conns = [], bots = [];
+    let mouse = { x: 0, y: 0 };
+    let BOT_NAMES = ["一個不會低頭的男人", "與生俱來王者氣息", "單棍"];
+    
+    // 死亡變數從快取讀取
+    let deathCount = parseInt(localStorage.getItem('fear_deaths')) || 0;
+    let myLevel = Math.floor(deathCount / 10) + 1;
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // 自動讀取同目錄 names.txt (5KB 小菜一碟)
+    async function autoLoadNames() {
+        try {
+            const resp = await fetch('names.txt');
+            if (resp.ok) {
+                const text = await resp.text();
+                const loaded = text.split(/\r?\n/).map(n => n.trim()).filter(n => n.length > 0);
+                if (loaded.length > 0) BOT_NAMES = loaded;
+                console.log("馬甲注入成功:", BOT_NAMES.length);
+            }
+        } catch(e) { console.log("未偵測到 names.txt，使用預設名單"); }
+    }
+
+    async function startUniverse(hostMode) {
+        isHost = hostMode;
+        if(isHost) await autoLoadNames();
         
-        H, W = small_img.shape[:2]
-        center_x, center_y = W // 2, H // 2
-        current_time = time.time()
+        // 語音初始化
+        try {
+            myStream = await navigator.mediaDevices.getUserMedia({audio: true});
+        } catch(e) { console.log("語音不可用"); }
 
-        # 3. 視覺掩膜
-        # 抓取白色 (球體)
-        white_mask = cv2.inRange(hsv, np.array([0, 0, 230]), np.array([180, 20, 255]))
-        # 抓取綠色 (刺球)
-        virus_mask = cv2.inRange(hsv, np.array([40, 100, 100]), np.array([80, 255, 255]))
+        peer = isHost ? new Peer(document.getElementById('room-id').value) : new Peer();
+        
+        peer.on('open', id => {
+            myId = id;
+            myCells.push({ x: WORLD_SIZE/2, y: WORLD_SIZE/2, r: 60, vx: 0, vy: 0 });
+            if(isHost) setupHost(); else setupClient(document.getElementById('room-id').value);
+            document.getElementById('overlay').style.display = 'none';
+            updateUI();
+            initGame();
+        });
 
-        # --- 精準自我屏蔽 (圍繞中心填滿) ---
-        cnts, _ = cv2.findContours(white_mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for c in cnts:
-            # 計算該色塊邊緣離中心點的距離
-            dist = cv2.pointPolygonTest(c, (center_x, center_y), True)
-            # 如果中心點在輪廓內，或距離極近 (自己或分身)
-            if dist > -20:
-                # 取得包圍圓並向外擴張屏蔽 (覆蓋名字與邊緣)
-                (x, y), r = cv2.minEnclosingCircle(c)
-                cv2.circle(white_mask, (int(x), int(y)), int(r + 15), 0, -1)
+        peer.on('call', call => {
+            call.answer(myStream);
+            call.on('stream', rem => { const a = new Audio(); a.srcObject = rem; a.play(); });
+        });
+    }
 
-        # 排除 UI 文字區
-        white_mask[:int(H*0.12), :] = 0 
-        white_mask[int(H*0.88):, :] = 0
+    function setupHost() {
+        // 生成食物與 Bot
+        for(let i=0; i<8000; i++) foods.push({id: i, x: Math.random()*WORLD_SIZE, y: Math.random()*WORLD_SIZE});
+        for(let i=0; i<1500; i++) {
+            let name = BOT_NAMES[i % BOT_NAMES.length];
+            if(i >= BOT_NAMES.length) name += `_${Math.floor(i/BOT_NAMES.length)}`;
+            bots.push({id: 'bot_'+i, x: Math.random()*WORLD_SIZE, y: Math.random()*WORLD_SIZE, r: 35+Math.random()*45, name: name});
+        }
 
-        # 4. 威脅與目標分析
-        threat_vec = np.array([0.0, 0.0])
-        # 刺球避讓
-        v_cnts, _ = cv2.findContours(virus_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for c in v_cnts:
-            if cv2.contourArea(c) < 100: continue
-            M = cv2.moments(c)
-            if M["m00"] == 0: continue
-            vx, vy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
-            d = math.hypot(vx - center_x, vy - center_y)
-            if d < 100: # 縮小後的距離
-                angle = math.atan2(vy - center_y, vx - center_x)
-                threat_vec -= np.array([math.cos(angle), math.sin(angle)]) * (100 - d) * 4
+        peer.on('connection', c => {
+            conns.push(c);
+            if(myStream) peer.call(c.peer, myStream);
+            c.on('data', data => {
+                if(data.type === 'grid_update') {
+                    data.bots.forEach(upd => {
+                        let b = bots.find(bt => bt.id === upd.id);
+                        if(b) { b.x = upd.x; b.y = upd.y; b.r = upd.r; }
+                    });
+                }
+                if(data.type === 'chat' || data.type === 'kill_notice') broadcast(data);
+                if(data.type === 'move') players[data.id] = data;
+                if(data.type === 'eat_food') foods = foods.filter(f => f.id !== data.foodId);
+                if(data.type === 'spawn_food') { for(let i=0; i<data.count; i++) foods.push({id:Date.now()+i, x:Math.random()*WORLD_SIZE, y:Math.random()*WORLD_SIZE}); }
+            });
+        });
+        setInterval(() => broadcast({type: 'sync', players, foods, bots}), 50);
+    }
 
-        # 實心球搜尋
-        best_target = None
-        max_prio = -1
-        f_cnts, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for c in f_cnts:
-            area = cv2.contourArea(c)
-            if area > MIN_BALL_AREA:
-                M = cv2.moments(c)
-                if M["m00"] == 0: continue
-                fx, fy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
-                d = math.hypot(fx - center_x, fy - center_y)
+    function setupClient(rId) {
+        conn = peer.connect(rId);
+        conn.on('open', () => { if(myStream) peer.call(rId, myStream); });
+        conn.on('data', data => {
+            if(data.type === 'sync') { players = data.players; foods = data.foods; bots = data.bots; }
+            if(data.type === 'chat') addChatMessage(data.name, data.msg, data.color);
+            if(data.type === 'kill_notice') addChatMessage("📢 宇宙公告", data.msg, "#ffcc00");
+        });
+    }
+
+    function broadcast(data) {
+        if(isHost) {
+            conns.forEach(c => c.open && c.send(data));
+            if(data.type === 'chat') addChatMessage(data.name, data.msg, data.color);
+            if(data.type === 'kill_notice') addChatMessage("📢 宇宙公告", data.msg, "#ffcc00");
+        } else if(conn && conn.open) conn.send(data);
+    }
+
+    function addChatMessage(name, msg, color="#ff0000") {
+        const div = document.createElement('div');
+        div.innerHTML = `<b style="color:${color}">${name}:</b> <span style="color:#eee">${msg}</span>`;
+        const content = document.getElementById('chat-content');
+        content.appendChild(div);
+        content.scrollTop = content.scrollHeight;
+    }
+
+    function updateUI() {
+        document.getElementById('level-display').innerText = `階級: Lv.${myLevel}`;
+        document.getElementById('death-display').innerText = `死亡場數: ${deathCount}`;
+    }
+
+    function handleDeath() {
+        deathCount++;
+        localStorage.setItem('fear_deaths', deathCount);
+        myLevel = Math.floor(deathCount / 10) + 1;
+        updateUI();
+        myCells = [{ x: Math.random()*WORLD_SIZE, y: Math.random()*WORLD_SIZE, r: 60, vx:0, vy:0 }];
+    }
+
+    function initGame() {
+        canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+        window.onmousemove = e => { mouse.x = e.clientX - canvas.width/2; mouse.y = e.clientY - canvas.height/2; };
+        document.getElementById('chat-input').onkeydown = e => {
+            if(e.key === 'Enter' && e.target.value.trim()) {
+                broadcast({type:'chat', name: document.getElementById('user-name').value || "Fear", msg: e.target.value, color: "#00ff00"});
+                e.target.value = '';
+            }
+        };
+        window.onkeydown = e => {
+            if(document.activeElement.id === 'chat-input') return;
+            if(e.key === ' ') splitCells();
+            if(e.key.toLowerCase() === 'w') jetSprint();
+        };
+        loop();
+    }
+
+    function jetSprint() {
+        myCells.forEach(c => {
+            if(c.r > 45) {
+                c.r -= 2.5; let ang = Math.atan2(mouse.y, mouse.x);
+                c.vx += Math.cos(ang)*30; c.vy += Math.sin(ang)*30;
+                broadcast({type: 'spawn_food', count: 3});
+            }
+        });
+    }
+
+    function splitCells() {
+        if(myCells.length >= 16) return;
+        let newC = [];
+        myCells.forEach(c => {
+            if(c.r > 60) {
+                c.r /= 1.414; let ang = Math.atan2(mouse.y, mouse.x);
+                newC.push({ x: c.x, y: c.y, r: c.r, vx: Math.cos(ang)*50, vy: Math.sin(ang)*50 });
+            }
+        });
+        myCells.push(...newC);
+    }
+
+    function loop() {
+        myCells.forEach(c => {
+            let d = Math.sqrt(mouse.x**2 + mouse.y**2), s = Math.max(2, 140/c.r);
+            if(d > 5) { c.x += (mouse.x/d)*s + (c.vx||0); c.y += (mouse.y/d)*s + (c.vy||0); }
+            c.vx *= 0.85; c.vy *= 0.85;
+            c.x = Math.max(0, Math.min(WORLD_SIZE, c.x)); c.y = Math.max(0, Math.min(WORLD_SIZE, c.y));
+            
+            for(let i=foods.length-1; i>=0; i--) {
+                if(Math.hypot(c.x-foods[i].x, c.y-foods[i].y) < c.r) {
+                    c.r += 14/c.r; broadcast({type: 'eat_food', foodId: foods[i].id}); foods.splice(i, 1);
+                }
+            }
+        });
+
+        // 核心：分區塊 AI 運算 (1050 解脫)
+        let myGridX = Math.floor(myCells[0].x / GRID_SIZE), myGridY = Math.floor(myCells[0].y / GRID_SIZE);
+        let updBots = [];
+        bots.forEach(b => {
+            let bgX = Math.floor(b.x/GRID_SIZE), bgY = Math.floor(b.y/GRID_SIZE);
+            if(Math.abs(bgX-myGridX) <= 1 && Math.abs(bgY-myGridY) <= 1) {
+                let dx = myCells[0].x-b.x, dy = myCells[0].y-b.y, dist = Math.hypot(dx,dy);
+                let mx = Math.random()-0.5, my = Math.random()-0.5;
+                if(dist < 1800) { if(myCells[0].r > b.r) { mx=-dx; my=-dy; } else { mx=dx; my=dy; } }
+                let mag = Math.hypot(mx,my); b.x += (mx/mag)*(110/b.r); b.y += (my/mag)*(110/b.r);
+                updBots.push({id:b.id, x:b.x, y:b.y, r:b.r});
                 
-                # 權重計算
-                prio = area / (d**1.1 + 1)
-                if prio > max_prio:
-                    max_prio = prio
-                    best_target = (fx, fy)
+                // 被玩家吃掉
+                if(dist < myCells[0].r && myCells[0].r > b.r * 1.1) {
+                    myCells[0].r += b.r * 0.18;
+                    broadcast({type: 'kill_notice', msg: `${document.getElementById('user-name').value || "Fear"} 吞噬了 ${b.name}`});
+                    b.x = Math.random()*WORLD_SIZE; b.y = Math.random()*WORLD_SIZE; b.r = 40;
+                }
+                // 反之：玩家撞到大 Bot 死亡
+                if(dist < b.r && b.r > myCells[0].r * 1.1) {
+                    handleDeath();
+                    broadcast({type: 'kill_notice', msg: `${b.name} 給了 Fear 一個深刻教訓`});
+                }
+            }
+        });
+        if(updBots.length > 0) broadcast({type: 'grid_update', bots: updBots});
+        broadcast({type: 'move', id: myId, name: document.getElementById('user-name').value || "Fear", cells: myCells});
+        render();
+        requestAnimationFrame(loop);
+    }
 
-        # 5. 決策邏輯
-        if np.linalg.norm(threat_vec) > 0.1:
-            tx, ty = center_x + threat_vec[0]*80, center_y + threat_vec[1]*80
-            last_target_pos = None
-        elif best_target:
-            tx, ty = best_target
-            last_target_pos = (tx, ty)
-            last_target_time = current_time
-        elif last_target_pos and (current_time - last_target_time) < PURSUIT_DELAY:
-            tx, ty = last_target_pos
-        else:
-            # 隨機巡航
-            tx = center_x + math.cos(current_time * 0.5) * 150
-            ty = center_y + math.sin(current_time * 0.5) * 150
+    function render() {
+        ctx.setTransform(1,0,0,1,0,0);
+        ctx.fillStyle = '#000'; ctx.fillRect(0,0,canvas.width, canvas.height);
+        let avgX = myCells.reduce((a,b)=>a+b.x,0)/myCells.length;
+        let avgY = myCells.reduce((a,b)=>a+b.y,0)/myCells.length;
+        let zoom = Math.pow(50/Math.max(...myCells.map(c=>c.r)), 0.45);
+        ctx.translate(canvas.width/2, canvas.height/2); ctx.scale(zoom, zoom); ctx.translate(-avgX, -avgY);
 
-        # 6. 座標還原與移動執行
-        # 將降採樣後的座標 tx, ty 還原回原始解析度
-        final_tx = (tx / SCALE_FACTOR) + target_win.left
-        final_ty = (ty / SCALE_FACTOR) + target_win.top
-        
-        # 平滑移動
-        cur_x, cur_y = pyautogui.position()
-        move_x = cur_x + (final_tx - cur_x) * LOCK_SMOOTHING
-        move_y = cur_y + (final_ty - cur_y) * LOCK_SMOOTHING
-        
-        pyautogui.moveTo(move_x, move_y, _pause=False)
+        ctx.strokeStyle = '#330000'; ctx.lineWidth = 200; ctx.strokeRect(0,0,WORLD_SIZE,WORLD_SIZE);
+        ctx.fillStyle = '#fff';
+        foods.forEach(f => { if(Math.hypot(f.x-avgX, f.y-avgY) < 6000/zoom) { ctx.beginPath(); ctx.arc(f.x,f.y,20,0,7); ctx.fill(); } });
 
-except Exception as e:
-    print(f"核心出錯: {e}")
+        let myName = document.getElementById('user-name').value || "Fear";
+        let entities = [
+            { name: myName, cells: myCells, isMe: true },
+            ...Object.values(players).filter(p => p.id !== myId),
+            ...bots.map(b => ({ name: b.name, cells: [{x:b.x,y:b.y,r:b.r}], isBot: true }))
+        ];
+
+        entities.forEach(p => {
+            p.cells.forEach(c => {
+                if(Math.hypot(c.x-avgX, c.y-avgY) > 8000/zoom) return;
+                ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, 7); 
+                ctx.fillStyle = '#fff'; ctx.fill();
+                ctx.fillStyle = p.isMe ? '#ff0000' : '#fff';
+                ctx.font = `bold ${20 + c.r/12}px Arial`; ctx.textAlign = 'center';
+                ctx.fillText(p.name, c.x, c.y);
+            });
+        });
+
+        let sorted = entities.sort((a,b) => b.cells[0].r - a.cells[0].r).slice(0, 10);
+        document.getElementById('lb-list').innerHTML = sorted.map((p, i) => 
+            `<div style="color:${p.isMe?'#ff0000':'#fff'}">${i+1}. ${p.name.substring(0,10)} (${Math.floor(p.cells[0].r)})</div>`
+        ).join('');
+    }
+</script>
+</body>
+</html>
